@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Gathering Scheduler</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f4; color: #1a1a18; min-height: 100vh; }
+  input, button, select { font-family: inherit; }
+  button { background: transparent; border: 0.5px solid #ccc; border-radius: 8px; cursor: pointer; padding: 8px 16px; font-size: 14px; color: #1a1a18; transition: background 0.15s; }
+  button:hover { background: #f0f0ee; }
+  input { border: 0.5px solid #ccc; border-radius: 8px; padding: 10px 12px; font-size: 15px; width: 100%; outline: none; background: #fff; color: #1a1a18; }
+  input:focus { border-color: #4F8EF7; box-shadow: 0 0 0 2px rgba(79,142,247,0.15); }
+  /* Firebase CDN */
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- Firebase -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.7.1/firebase-app-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.7.1/firebase-database-compat.min.js"></script>
+
+<script type="text/babel">
+// ─────────────────────────────────────────────
+// FIREBASE CONFIG — replace with your own from
+// console.firebase.google.com (free Spark plan)
+// ─────────────────────────────────────────────
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCAC5C1xNHt8InJUoQyso_RGxorZNZCKMo",
+  authDomain: "event-scheduler-fab1f.firebaseapp.com",
+  databaseURL: "https://event-scheduler-fab1f-default-rtdb.firebaseio.com",
+  projectId: "event-scheduler-fab1f",
+  storageBucket: "event-scheduler-fab1f.firebasestorage.app",
+  messagingSenderId: "787740105928",
+  appId: "1:787740105928:web:b5dda5e67092a112f4d9fd"
+};
+
+firebase.initializeApp(FIREBASE_CONFIG);
+const db = firebase.database();
+
+// ─────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────
+const PRESET_COLORS = [
+  { hex: "#4F8EF7", label: "Blue" },
+  { hex: "#E2534A", label: "Red" },
+  { hex: "#3DBF82", label: "Green" },
+  { hex: "#F5A623", label: "Orange" },
+  { hex: "#9B59B6", label: "Purple" },
+  { hex: "#E91E8C", label: "Pink" },
+  { hex: "#00BCD4", label: "Cyan" },
+  { hex: "#FF7043", label: "Coral" },
+  { hex: "#8BC34A", label: "Lime" },
+  { hex: "#795548", label: "Brown" },
+];
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+function getDaysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
+function getFirstDay(y, m) { return new Date(y, m, 1).getDay(); }
+function genCode() { return Math.random().toString(36).substring(2, 8).toUpperCase(); }
+function parseMonth(m) { const [y, mo] = m.split("-").map(Number); return { year: y, month: mo }; }
+function sortMonths(arr) {
+  return [...arr].sort((a, b) => {
+    const [ay, am] = a.split("-").map(Number), [by, bm] = b.split("-").map(Number);
+    return ay !== by ? ay - by : am - bm;
+  });
+}
+
+// ─────────────────────────────────────────────
+// DB HELPERS
+// ─────────────────────────────────────────────
+async function dbGet(id) {
+  const snap = await db.ref(`sessions/${id}`).get();
+  return snap.exists() ? snap.val() : null;
+}
+async function dbSet(id, data) {
+  await db.ref(`sessions/${id}`).set(data);
+}
+function dbListen(id, cb) {
+  const ref = db.ref(`sessions/${id}`);
+  ref.on("value", snap => { if (snap.exists()) cb(snap.val()); });
+  return () => ref.off();
+}
+
+// ─────────────────────────────────────────────
+// APP
+// ─────────────────────────────────────────────
+const { useState, useEffect, useCallback } = React;
+
+function App() {
+  const [screen, setScreen] = useState("home");
+  const [userName, setUserName] = useState("");
+  const [userColor, setUserColor] = useState("");
+  const [selectedMonths, setSelectedMonths] = useState([]);
+  const [eventTitle, setEventTitle] = useState("");
+  const [sessionId, setSessionId] = useState(null);
+  const [sessionData, setSessionData] = useState(null);
+  const [viewMonth, setViewMonth] = useState(null);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [joinInput, setJoinInput] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [saveStatus, setSaveStatus] = useState("");
+
+  // Parse session ID from URL hash on mount
+  useEffect(() => {
+    const hash = window.location.hash.slice(1);
+    if (hash && hash.length <= 10) {
+      setSessionId(hash);
+      dbGet(hash).then(data => {
+        if (data) { setSessionData(data); setScreen("join"); }
+        else setError("Session not found.");
+      });
+    }
+  }, []);
+
+  // Live listener when on calendar
+  useEffect(() => {
+    if (screen !== "calendar" || !sessionId) return;
+    const unsub = dbListen(sessionId, data => setSessionData({ ...data }));
+    return unsub;
+  }, [screen, sessionId]);
+
+  async function saveSession(id, data) {
+    setSaveStatus("saving");
+    await dbSet(id, data);
+    setSessionData({ ...data });
+    setSaveStatus("saved");
+    setTimeout(() => setSaveStatus(""), 1500);
+  }
+
+  function getShareUrl(id) {
+    return `${window.location.href.split("#")[0]}#${id || sessionId}`;
+  }
+
+  function copyLink(id) {
+    const url = getShareUrl(id);
+    const finish = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(finish).catch(() => fallbackCopy(url, finish));
+    else fallbackCopy(url, finish);
+  }
+
+  function fallbackCopy(text, cb) {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.cssText = "position:fixed;opacity:0;top:0;left:0";
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    try { document.execCommand("copy"); cb?.(); } catch {}
+    document.body.removeChild(ta);
+  }
+
+  function usedColors() { return (sessionData?.users || []).map(u => u.color); }
+
+  // ── HOME ──
+  if (screen === "home") return (
+    <div style={{ maxWidth: 420, margin: "2rem auto", padding: "0 1rem" }}>
+      <h2 style={{ fontSize: 22, fontWeight: 500, marginBottom: 6 }}>Gathering Scheduler</h2>
+      <p style={{ color: "#666", fontSize: 15, marginBottom: 24 }}>Coordinate get-togethers with friends & family — no login needed.</p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <button onClick={() => { setScreen("setup"); setError(""); }}
+          style={{ padding: "14px 0", fontSize: 15, fontWeight: 500, borderRadius: 8, background: "#4F8EF7", color: "#fff", border: "none" }}>
+          Create a new scheduler
+        </button>
+        <div style={{ textAlign: "center", color: "#999", fontSize: 13 }}>— or —</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input placeholder="Paste invite link or code" value={joinInput} onChange={e => setJoinInput(e.target.value)} style={{ flex: 1 }} />
+          <button onClick={async () => {
+            let raw = joinInput.trim();
+            const id = raw.includes("#") ? raw.split("#").pop() : raw;
+            if (!id) { setError("Enter a link or code."); return; }
+            setLoading(true);
+            const data = await dbGet(id);
+            setLoading(false);
+            if (!data) { setError("Session not found."); return; }
+            setSessionId(id); window.location.hash = id; setSessionData(data); setScreen("join"); setError("");
+          }} style={{ padding: "10px 18px", whiteSpace: "nowrap" }}>{loading ? "..." : "Join"}</button>
+        </div>
+        {error && <p style={{ color: "#c0392b", fontSize: 13 }}>{error}</p>}
+      </div>
+    </div>
+  );
+
+  // ── SETUP ──
+  if (screen === "setup") {
+    const now = new Date();
+    const monthOptions = Array.from({ length: 6 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      return { label: `${MONTHS[d.getMonth()]} ${d.getFullYear()}`, value: `${d.getFullYear()}-${d.getMonth()}` };
+    });
+    return (
+      <div style={{ maxWidth: 420, margin: "2rem auto", padding: "0 1rem" }}>
+        <button onClick={() => setScreen("home")} style={{ border: "none", color: "#888", fontSize: 13, padding: 0, marginBottom: 16, background: "none" }}>← Back</button>
+        <h2 style={{ fontSize: 20, fontWeight: 500, marginBottom: 20 }}>Set up your scheduler</h2>
+        <label style={{ fontSize: 13, color: "#666", display: "block", marginBottom: 6 }}>Event name</label>
+        <input value={eventTitle} onChange={e => setEventTitle(e.target.value)} placeholder="e.g. Summer BBQ, Game Night, Family Reunion" style={{ marginBottom: 20 }} />
+        <label style={{ fontSize: 13, color: "#666", display: "block", marginBottom: 8 }}>Which months should people pick from?</label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+          {monthOptions.map(m => {
+            const sel = selectedMonths.includes(m.value);
+            return (
+              <div key={m.value} onClick={() => {
+                const updated = sel ? selectedMonths.filter(x => x !== m.value) : [...selectedMonths, m.value];
+                setSelectedMonths(sortMonths(updated));
+              }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 8, border: sel ? "1.5px solid #4F8EF7" : "0.5px solid #ddd", background: sel ? "#EBF2FF" : "#fff", cursor: "pointer" }}>
+                <div style={{ width: 18, height: 18, borderRadius: 4, border: sel ? "2px solid #4F8EF7" : "1.5px solid #ccc", background: sel ? "#4F8EF7" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#fff", fontSize: 12 }}>
+                  {sel && "✓"}
+                </div>
+                <span style={{ fontSize: 15 }}>{m.label}</span>
+              </div>
+            );
+          })}
+        </div>
+        {error && <p style={{ color: "#c0392b", fontSize: 13, marginBottom: 10 }}>{error}</p>}
+        <button onClick={async () => {
+          if (!eventTitle.trim()) { setError("Enter an event name."); return; }
+          if (!selectedMonths.length) { setError("Select at least one month."); return; }
+          setLoading(true);
+          const id = genCode();
+          const data = { code: id, title: eventTitle.trim(), months: selectedMonths, users: [], availability: {} };
+          await saveSession(id, data);
+          setSessionId(id); window.location.hash = id;
+          setLoading(false); setScreen("join"); setError("");
+        }} style={{ width: "100%", padding: "13px 0", fontSize: 15, fontWeight: 500, borderRadius: 8, background: loading ? "#aaa" : "#4F8EF7", color: "#fff", border: "none" }}>
+          {loading ? "Creating..." : "Create & Continue"}
+        </button>
+      </div>
+    );
+  }
+
+  // ── JOIN ──
+  if (screen === "join") {
+    const taken = usedColors();
+    return (
+      <div style={{ maxWidth: 420, margin: "2rem auto", padding: "0 1rem" }}>
+        {sessionData?.title && (
+          <div style={{ marginBottom: 20, padding: "12px 16px", borderRadius: 8, background: "#EBF2FF", border: "1.5px solid #4F8EF7" }}>
+            <p style={{ fontSize: 12, color: "#185FA5", marginBottom: 2, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.05em" }}>Event</p>
+            <p style={{ fontSize: 18, fontWeight: 500, color: "#0C447C" }}>{sessionData.title}</p>
+          </div>
+        )}
+        <h2 style={{ fontSize: 20, fontWeight: 500, marginBottom: 4 }}>Enter your details</h2>
+        <p style={{ color: "#666", fontSize: 14, marginBottom: 20 }}>Pick a unique color — no two people can share one.</p>
+        <label style={{ fontSize: 13, color: "#666", display: "block", marginBottom: 6 }}>Your name</label>
+        <input value={userName} onChange={e => setUserName(e.target.value)} placeholder="e.g. Jamie" style={{ marginBottom: 18 }} />
+        <label style={{ fontSize: 13, color: "#666", display: "block", marginBottom: 8 }}>Your color</label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 20 }}>
+          {PRESET_COLORS.map(c => {
+            const isTaken = taken.includes(c.hex), isSel = userColor === c.hex;
+            return (
+              <div key={c.hex} title={isTaken ? `${c.label} (taken)` : c.label} onClick={() => { if (!isTaken) setUserColor(c.hex); }}
+                style={{ width: 34, height: 34, borderRadius: "50%", background: c.hex, opacity: isTaken ? 0.25 : 1, cursor: isTaken ? "not-allowed" : "pointer", border: isSel ? "3px solid #111" : "2px solid transparent", position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {isTaken && <span style={{ color: "#fff", fontSize: 14 }}>✕</span>}
+              </div>
+            );
+          })}
+        </div>
+        {userColor && <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, fontSize: 14, color: "#666" }}>
+          <div style={{ width: 14, height: 14, borderRadius: "50%", background: userColor, flexShrink: 0 }} />
+          <span>Your availability will appear in this color</span>
+        </div>}
+        {error && <p style={{ color: "#c0392b", fontSize: 13, marginBottom: 10 }}>{error}</p>}
+        <button onClick={async () => {
+          if (!userName.trim()) { setError("Enter your name."); return; }
+          if (!userColor) { setError("Pick a color."); return; }
+          setLoading(true);
+          const fresh = await dbGet(sessionId);
+          setLoading(false);
+          if (!fresh) { setError("Could not load session. Try again."); return; }
+          if ((fresh.users || []).some(u => u.color === userColor)) { setError("That color was just taken. Pick another."); return; }
+          const updated = { ...fresh, users: [...(fresh.users || []), { name: userName.trim(), color: userColor }] };
+          await saveSession(sessionId, updated);
+          setViewMonth(updated.months[0]); setSubmitted(false); setScreen("calendar"); setError("");
+        }} style={{ width: "100%", padding: "13px 0", fontSize: 15, fontWeight: 500, borderRadius: 8, background: loading ? "#aaa" : "#4F8EF7", color: "#fff", border: "none" }}>
+          {loading ? "Joining..." : "Enter Scheduler"}
+        </button>
+        <div style={{ marginTop: 24, padding: 16, borderRadius: 8, border: "2px solid #4F8EF7", background: "#EBF2FF" }}>
+          <p style={{ fontSize: 13, fontWeight: 500, color: "#0C447C", marginBottom: 10 }}>Invite friends & family to fill in their availability</p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input readOnly value={getShareUrl(sessionId)} style={{ flex: 1, fontSize: 12, padding: "8px 10px", border: "0.5px solid #4F8EF7", background: "#fff", color: "#555", overflow: "hidden", textOverflow: "ellipsis" }} />
+            <button onClick={() => copyLink(sessionId)}
+              style={{ padding: "8px 16px", fontSize: 13, fontWeight: 500, borderRadius: 8, whiteSpace: "nowrap", background: copied ? "#3DBF82" : "#4F8EF7", color: "#fff", border: "none" }}>
+              {copied ? "Copied!" : "Copy link"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── CALENDAR ──
+  if (screen === "calendar" && sessionData) {
+    const activeMonth = viewMonth || sessionData.months[0];
+    const { year, month } = parseMonth(activeMonth);
+    const daysInMonth = getDaysInMonth(year, month);
+    const firstDay = getFirstDay(year, month);
+    const totalCells = Math.ceil((firstDay + daysInMonth) / 7) * 7;
+    const avail = sessionData.availability || {};
+
+    function dayKey(d) { return `${year}-${month}-${d}`; }
+    function getUsersOnDay(d) { const v = avail[dayKey(d)]; return v ? Object.values(v) : []; }
+    function isMyDay(d) { return getUsersOnDay(d).some(u => u.name === userName); }
+
+    async function toggleDay(d) {
+      if (submitted) return;
+      const key = dayKey(d);
+      const snap = await db.ref(`sessions/${sessionId}/availability/${key}`).get();
+      const current = snap.exists() ? Object.values(snap.val()) : [];
+      if (current.some(u => u.name === userName)) {
+        // find and remove by key
+        const raw = snap.val();
+        const delKey = Object.keys(raw).find(k => raw[k].name === userName);
+        if (delKey) await db.ref(`sessions/${sessionId}/availability/${key}/${delKey}`).remove();
+      } else {
+        await db.ref(`sessions/${sessionId}/availability/${key}`).push({ name: userName, color: userColor });
+      }
+      setSaveStatus("saved"); setTimeout(() => setSaveStatus(""), 1200);
+    }
+
+    return (
+      <div style={{ maxWidth: 560, margin: "1rem auto", padding: "0 0.5rem" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <p style={{ fontSize: 11, color: "#888", marginBottom: 2, textTransform: "uppercase", letterSpacing: "0.05em" }}>Scheduling for</p>
+            <p style={{ fontSize: 17, fontWeight: 500 }}>{sessionData.title}</p>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {saveStatus && <span style={{ fontSize: 12, color: saveStatus === "saving" ? "#888" : "#3DBF82" }}>{saveStatus === "saving" ? "Saving..." : "Saved ✓"}</span>}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 20, border: "0.5px solid #ddd", background: "#f5f5f4", fontSize: 13 }}>
+              <div style={{ width: 10, height: 10, borderRadius: "50%", background: userColor }} />
+              <span>{userName}</span>
+            </div>
+          </div>
+        </div>
+
+        <div onClick={() => copyLink()} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, padding: "12px 16px", borderRadius: 8, background: "#4F8EF7", cursor: "pointer" }}>
+          <div>
+            <p style={{ fontSize: 13, fontWeight: 500, color: "#fff", marginBottom: 1 }}>Invite others to add their availability</p>
+            <p style={{ fontSize: 12, color: "rgba(255,255,255,0.8)" }}>Tap to copy invite link</p>
+          </div>
+          <div style={{ padding: "6px 14px", borderRadius: 8, background: copied ? "#3DBF82" : "rgba(255,255,255,0.25)", color: "#fff", fontSize: 13, fontWeight: 500, whiteSpace: "nowrap" }}>
+            {copied ? "Copied!" : "Copy link"}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+          {sessionData.months.map(m => {
+            const { year: y, month: mo } = parseMonth(m);
+            const active = m === activeMonth;
+            return (
+              <button key={m} onClick={() => setViewMonth(m)}
+                style={{ padding: "6px 14px", borderRadius: 20, fontSize: 13, border: active ? "none" : "0.5px solid #ccc", background: active ? "#4F8EF7" : "#f0f0ee", color: active ? "#fff" : "#1a1a18", fontWeight: active ? 500 : 400 }}>
+                {MONTHS[mo].slice(0, 3)} {y}
+              </button>
+            );
+          })}
+        </div>
+
+        {submitted && (
+          <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 8, background: "#d4edda", border: "1.5px solid #3DBF82", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <span style={{ fontSize: 14, color: "#1a5e2a", fontWeight: 500 }}>Availability submitted!</span>
+            <button onClick={() => setSubmitted(false)} style={{ fontSize: 13, padding: "5px 12px", borderRadius: 8, border: "1px solid #3DBF82", background: "#fff", color: "#1a5e2a" }}>Edit</button>
+          </div>
+        )}
+
+        <div style={{ background: "#fff", borderRadius: 12, border: "0.5px solid #ddd", padding: "12px 10px", opacity: submitted ? 0.75 : 1 }}>
+          <p style={{ textAlign: "center", fontWeight: 500, fontSize: 16, marginBottom: 12 }}>{MONTHS[month]} {year}</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2, marginBottom: 4 }}>
+            {DAYS.map(d => <div key={d} style={{ textAlign: "center", fontSize: 11, color: "#888", padding: "2px 0" }}>{d}</div>)}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 3 }}>
+            {Array.from({ length: totalCells }).map((_, i) => {
+              const day = i - firstDay + 1;
+              if (day < 1 || day > daysInMonth) return <div key={i} />;
+              const mine = isMyDay(day);
+              const users = getUsersOnDay(day);
+              const count = users.length, total = (sessionData.users || []).length;
+              let bg = "#f5f5f4", border = "#ddd", textCol = "#1a1a18";
+              if (count > 0) {
+                const ratio = count / Math.max(total, 1);
+                if (ratio === 1 && total > 1) { bg = "#d4edda"; textCol = "#1a5e2a"; border = "#3DBF82"; }
+                else if (ratio >= 0.5) { bg = "#fff3cd"; textCol = "#7a4f00"; border = "#F5A623"; }
+                else { bg = "#fde8e8"; textCol = "#7a1a1a"; border = "#E2534A"; }
+              }
+              return (
+                <div key={i} onClick={() => toggleDay(day)}
+                  style={{ minHeight: 54, borderRadius: 6, border: `1.5px solid ${mine ? userColor : border}`, background: bg, cursor: submitted ? "default" : "pointer", padding: "4px 5px", display: "flex", flexDirection: "column", justifyContent: "space-between", position: "relative" }}>
+                  <span style={{ fontSize: 13, fontWeight: mine ? 500 : 400, color: textCol }}>{day}</span>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 2, minHeight: 10 }}>
+                    {users.slice(0, 5).map((u, idx) => <div key={idx} style={{ width: 6, height: 6, borderRadius: "50%", background: u.color }} />)}
+                  </div>
+                  {mine && <div style={{ position: "absolute", top: 3, right: 3, width: 8, height: 8, borderRadius: "50%", background: userColor, border: "2px solid #fff", zIndex: 1 }} />}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 10, fontSize: 12, color: "#888" }}>
+          {[["#d4edda","#3DBF82","All available"],["#fff3cd","#F5A623","Partial overlap"],["#fde8e8","#E2534A","Few available"],["#f5f5f4","#ddd","No responses"]].map(([bg,bd,label]) => (
+            <div key={label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{ width: 14, height: 14, borderRadius: 3, background: bg, border: `1.5px solid ${bd}` }} />
+              <span>{label}</span>
+            </div>
+          ))}
+        </div>
+
+        {!submitted && (
+          <button onClick={() => setSubmitted(true)}
+            style={{ width: "100%", marginTop: 18, padding: "14px 0", fontSize: 15, fontWeight: 500, borderRadius: 8, background: "#3DBF82", color: "#fff", border: "none" }}>
+            Submit availability
+          </button>
+        )}
+
+        <div style={{ marginTop: 16, padding: "12px 14px", borderRadius: 8, border: "0.5px solid #ddd", background: "#f5f5f4" }}>
+          <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Participants ({(sessionData.users || []).length})</p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {(sessionData.users || []).map((u, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 20, background: "#fff", border: "0.5px solid #ddd", fontSize: 13 }}>
+                <div style={{ width: 10, height: 10, borderRadius: "50%", background: u.color }} />
+                <span>{u.name}{u.name === userName ? " (you)" : ""}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <p style={{ fontSize: 12, color: "#888", marginTop: 10, textAlign: "center" }}>Tap any date to mark yourself as available. Tap again to remove.</p>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
