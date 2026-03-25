@@ -15,37 +15,45 @@
   button:hover { background: #f0f0ee; }
   input { border: 0.5px solid #ccc; border-radius: 8px; padding: 10px 12px; font-size: 15px; width: 100%; outline: none; background: #fff; color: #1a1a18; }
   input:focus { border-color: #4F8EF7; box-shadow: 0 0 0 2px rgba(79,142,247,0.15); }
-  /* Firebase CDN */
 </style>
 </head>
 <body>
 <div id="root"></div>
 
-<!-- Firebase -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.7.1/firebase-app-compat.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.7.1/firebase-database-compat.min.js"></script>
 
+<script>
+  /* ============================================================
+     FIREBASE CONFIGURATION
+     ------------------------------------------------------------
+     1. Go to console.firebase.google.com
+     2. Select your project → click the gear icon → Project settings
+     3. Scroll to "Your apps" → click your web app (or create one
+        by clicking the </> icon)
+     4. Copy each value from the firebaseConfig object shown there
+        and paste it below, replacing each PASTE_YOUR_... placeholder.
+     ============================================================ */
+
+  const FIREBASE_CONFIG = {
+    apiKey:            "AIzaSyCAC5C1xNHt8InJUoQyso_RGxorZNZCKMo",
+    authDomain:        "event-scheduler-fab1f.firebaseapp.com",
+    databaseURL:       "https://event-scheduler-fab1f-default-rtdb.firebaseio.com",
+    projectId:         "event-scheduler-fab1f",
+    storageBucket:     "event-scheduler-fab1f.firebasestorage.app",
+    messagingSenderId: "787740105928",
+    appId:             "1:787740105928:web:b5dda5e67092a112f4d9fd"
+  };
+
+  /* ============================================================
+     Do not edit below this line unless you are changing app logic
+     ============================================================ */
+  firebase.initializeApp(FIREBASE_CONFIG);
+  const db = firebase.database();
+</script>
+
 <script type="text/babel">
-// ─────────────────────────────────────────────
-// FIREBASE CONFIG — replace with your own from
-// console.firebase.google.com (free Spark plan)
-// ─────────────────────────────────────────────
-const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyCAC5C1xNHt8InJUoQyso_RGxorZNZCKMo",
-  authDomain: "event-scheduler-fab1f.firebaseapp.com",
-  databaseURL: "https://event-scheduler-fab1f-default-rtdb.firebaseio.com",
-  projectId: "event-scheduler-fab1f",
-  storageBucket: "event-scheduler-fab1f.firebasestorage.app",
-  messagingSenderId: "787740105928",
-  appId: "1:787740105928:web:b5dda5e67092a112f4d9fd"
-};
 
-firebase.initializeApp(FIREBASE_CONFIG);
-const db = firebase.database();
-
-// ─────────────────────────────────────────────
-// CONSTANTS
-// ─────────────────────────────────────────────
 const PRESET_COLORS = [
   { hex: "#4F8EF7", label: "Blue" },
   { hex: "#E2534A", label: "Red" },
@@ -58,6 +66,7 @@ const PRESET_COLORS = [
   { hex: "#8BC34A", label: "Lime" },
   { hex: "#795548", label: "Brown" },
 ];
+
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
@@ -72,9 +81,21 @@ function sortMonths(arr) {
   });
 }
 
-// ─────────────────────────────────────────────
-// DB HELPERS
-// ─────────────────────────────────────────────
+const STORAGE_KEY = "gatheringScheduler_identity";
+function saveIdentity(sessionId, name, color) {
+  try {
+    const all = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    all[sessionId] = { name, color };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+  } catch {}
+}
+function loadIdentity(sessionId) {
+  try {
+    const all = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    return all[sessionId] || null;
+  } catch { return null; }
+}
+
 async function dbGet(id) {
   const snap = await db.ref(`sessions/${id}`).get();
   return snap.exists() ? snap.val() : null;
@@ -85,13 +106,10 @@ async function dbSet(id, data) {
 function dbListen(id, cb) {
   const ref = db.ref(`sessions/${id}`);
   ref.on("value", snap => { if (snap.exists()) cb(snap.val()); });
-  return () => ref.off();
+  return () => ref.off("value");
 }
 
-// ─────────────────────────────────────────────
-// APP
-// ─────────────────────────────────────────────
-const { useState, useEffect, useCallback } = React;
+const { useState, useEffect } = React;
 
 function App() {
   const [screen, setScreen] = useState("home");
@@ -101,29 +119,38 @@ function App() {
   const [eventTitle, setEventTitle] = useState("");
   const [sessionId, setSessionId] = useState(null);
   const [sessionData, setSessionData] = useState(null);
-  const [viewMonth, setViewMonth] = useState(null);
+  const [viewMonthIdx, setViewMonthIdx] = useState(0);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [joinInput, setJoinInput] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saveStatus, setSaveStatus] = useState("");
+  const [viewOnly, setViewOnly] = useState(false);
 
-  // Parse session ID from URL hash on mount
   useEffect(() => {
     const hash = window.location.hash.slice(1);
     if (hash && hash.length <= 10) {
       setSessionId(hash);
       dbGet(hash).then(data => {
-        if (data) { setSessionData(data); setScreen("join"); }
-        else setError("Session not found.");
+        if (!data) { setError("Session not found."); return; }
+        setSessionData(data);
+        const identity = loadIdentity(hash);
+        if (identity && data.users?.some(u => u.name === identity.name && u.color === identity.color)) {
+          setUserName(identity.name);
+          setUserColor(identity.color);
+          setViewMonthIdx(0);
+          setSubmitted(false);
+          setScreen("calendar");
+        } else {
+          setScreen("join");
+        }
       });
     }
   }, []);
 
-  // Live listener when on calendar
   useEffect(() => {
-    if (screen !== "calendar" || !sessionId) return;
+    if ((screen !== "calendar" && screen !== "submitted") || !sessionId) return;
     const unsub = dbListen(sessionId, data => setSessionData({ ...data }));
     return unsub;
   }, [screen, sessionId]);
@@ -275,14 +302,15 @@ function App() {
           if ((fresh.users || []).some(u => u.color === userColor)) { setError("That color was just taken. Pick another."); return; }
           const updated = { ...fresh, users: [...(fresh.users || []), { name: userName.trim(), color: userColor }] };
           await saveSession(sessionId, updated);
-          setViewMonth(updated.months[0]); setSubmitted(false); setScreen("calendar"); setError("");
+          saveIdentity(sessionId, userName.trim(), userColor);
+          setViewMonthIdx(0); setSubmitted(false); setViewOnly(false); setScreen("calendar"); setError("");
         }} style={{ width: "100%", padding: "13px 0", fontSize: 15, fontWeight: 500, borderRadius: 8, background: loading ? "#aaa" : "#4F8EF7", color: "#fff", border: "none" }}>
           {loading ? "Joining..." : "Enter Scheduler"}
         </button>
         <div style={{ marginTop: 24, padding: 16, borderRadius: 8, border: "2px solid #4F8EF7", background: "#EBF2FF" }}>
           <p style={{ fontSize: 13, fontWeight: 500, color: "#0C447C", marginBottom: 10 }}>Invite friends & family to fill in their availability</p>
           <div style={{ display: "flex", gap: 8 }}>
-            <input readOnly value={getShareUrl(sessionId)} style={{ flex: 1, fontSize: 12, padding: "8px 10px", border: "0.5px solid #4F8EF7", background: "#fff", color: "#555", overflow: "hidden", textOverflow: "ellipsis" }} />
+            <input readOnly value={getShareUrl(sessionId)} style={{ flex: 1, fontSize: 12, padding: "8px 10px", border: "0.5px solid #4F8EF7", background: "#fff", color: "#555" }} />
             <button onClick={() => copyLink(sessionId)}
               style={{ padding: "8px 16px", fontSize: 13, fontWeight: 500, borderRadius: 8, whiteSpace: "nowrap", background: copied ? "#3DBF82" : "#4F8EF7", color: "#fff", border: "none" }}>
               {copied ? "Copied!" : "Copy link"}
@@ -294,25 +322,27 @@ function App() {
   }
 
   // ── CALENDAR ──
-  if (screen === "calendar" && sessionData) {
-    const activeMonth = viewMonth || sessionData.months[0];
+  if (screen === "calendar" && !submitted && sessionData) {
+    const months = sessionData.months || [];
+    const clampedIdx = Math.min(viewMonthIdx, months.length - 1);
+    const activeMonth = months[clampedIdx];
     const { year, month } = parseMonth(activeMonth);
     const daysInMonth = getDaysInMonth(year, month);
     const firstDay = getFirstDay(year, month);
     const totalCells = Math.ceil((firstDay + daysInMonth) / 7) * 7;
     const avail = sessionData.availability || {};
+    const totalUsers = (sessionData.users || []).length;
 
     function dayKey(d) { return `${year}-${month}-${d}`; }
     function getUsersOnDay(d) { const v = avail[dayKey(d)]; return v ? Object.values(v) : []; }
-    function isMyDay(d) { return getUsersOnDay(d).some(u => u.name === userName); }
+    function isMyDay(d) { return !viewOnly && getUsersOnDay(d).some(u => u.name === userName); }
 
     async function toggleDay(d) {
-      if (submitted) return;
+      if (viewOnly) return;
       const key = dayKey(d);
       const snap = await db.ref(`sessions/${sessionId}/availability/${key}`).get();
       const current = snap.exists() ? Object.values(snap.val()) : [];
       if (current.some(u => u.name === userName)) {
-        // find and remove by key
         const raw = snap.val();
         const delKey = Object.keys(raw).find(k => raw[k].name === userName);
         if (delKey) await db.ref(`sessions/${sessionId}/availability/${key}/${delKey}`).remove();
@@ -320,6 +350,22 @@ function App() {
         await db.ref(`sessions/${sessionId}/availability/${key}`).push({ name: userName, color: userColor });
       }
       setSaveStatus("saved"); setTimeout(() => setSaveStatus(""), 1200);
+    }
+
+    const overlapSummary = {};
+    Object.entries(avail).forEach(([key, val]) => {
+      const users = typeof val === "object" ? Object.values(val) : [];
+      const count = users.length;
+      if (count === 0) return;
+      const [y, mo, d] = key.split("-").map(Number);
+      const label = `${MONTHS[mo].slice(0,3)} ${d}, ${y}`;
+      if (!overlapSummary[count]) overlapSummary[count] = [];
+      overlapSummary[count].push({ label, users });
+    });
+
+    const tiers = [];
+    for (let n = totalUsers; n >= 1; n--) {
+      if (overlapSummary[n]?.length > 0) tiers.push({ count: n, days: overlapSummary[n] });
     }
 
     return (
@@ -331,14 +377,28 @@ function App() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {saveStatus && <span style={{ fontSize: 12, color: saveStatus === "saving" ? "#888" : "#3DBF82" }}>{saveStatus === "saving" ? "Saving..." : "Saved ✓"}</span>}
-            <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 20, border: "0.5px solid #ddd", background: "#f5f5f4", fontSize: 13 }}>
-              <div style={{ width: 10, height: 10, borderRadius: "50%", background: userColor }} />
-              <span>{userName}</span>
-            </div>
+            {!viewOnly && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 20, border: "0.5px solid #ddd", background: "#f5f5f4", fontSize: 13 }}>
+                <div style={{ width: 10, height: 10, borderRadius: "50%", background: userColor }} />
+                <span>{userName}</span>
+              </div>
+            )}
+            {viewOnly && (
+              <button onClick={() => setViewOnly(false)}
+                style={{ fontSize: 13, padding: "6px 14px", borderRadius: 8, cursor: "pointer", background: "#4F8EF7", color: "#fff", border: "none" }}>
+                Edit my availability
+              </button>
+            )}
           </div>
         </div>
 
-        <div onClick={() => copyLink()} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, padding: "12px 16px", borderRadius: 8, background: "#4F8EF7", cursor: "pointer" }}>
+        {viewOnly && (
+          <div style={{ marginBottom: 14, padding: "10px 14px", borderRadius: 8, background: "#EBF2FF", border: "1px solid #4F8EF7", fontSize: 13, color: "#185FA5" }}>
+            Viewing group availability — tap "Edit my availability" to make changes.
+          </div>
+        )}
+
+        <div onClick={() => copyLink(sessionId)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, padding: "12px 16px", borderRadius: 8, background: "#4F8EF7", cursor: "pointer" }}>
           <div>
             <p style={{ fontSize: 13, fontWeight: 500, color: "#fff", marginBottom: 1 }}>Invite others to add their availability</p>
             <p style={{ fontSize: 12, color: "rgba(255,255,255,0.8)" }}>Tap to copy invite link</p>
@@ -348,27 +408,27 @@ function App() {
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-          {sessionData.months.map(m => {
-            const { year: y, month: mo } = parseMonth(m);
-            const active = m === activeMonth;
-            return (
-              <button key={m} onClick={() => setViewMonth(m)}
-                style={{ padding: "6px 14px", borderRadius: 20, fontSize: 13, border: active ? "none" : "0.5px solid #ccc", background: active ? "#4F8EF7" : "#f0f0ee", color: active ? "#fff" : "#1a1a18", fontWeight: active ? 500 : 400 }}>
-                {MONTHS[mo].slice(0, 3)} {y}
-              </button>
-            );
-          })}
+        {/* Month pills + arrows */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+          <button onClick={() => setViewMonthIdx(i => Math.max(0, i - 1))} disabled={clampedIdx === 0}
+            style={{ width: 30, height: 30, borderRadius: "50%", border: "0.5px solid #ccc", background: "#f0f0ee", cursor: clampedIdx === 0 ? "not-allowed" : "pointer", opacity: clampedIdx === 0 ? 0.35 : 1, fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, padding: 0 }}>‹</button>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flex: 1 }}>
+            {months.map((m, i) => {
+              const { year: y, month: mo } = parseMonth(m);
+              const active = i === clampedIdx;
+              return (
+                <button key={m} onClick={() => setViewMonthIdx(i)}
+                  style={{ padding: "6px 14px", borderRadius: 20, fontSize: 13, border: active ? "none" : "0.5px solid #ccc", background: active ? "#4F8EF7" : "#f0f0ee", color: active ? "#fff" : "#1a1a18", fontWeight: active ? 500 : 400 }}>
+                  {MONTHS[mo].slice(0, 3)} {y}
+                </button>
+              );
+            })}
+          </div>
+          <button onClick={() => setViewMonthIdx(i => Math.min(months.length - 1, i + 1))} disabled={clampedIdx === months.length - 1}
+            style={{ width: 30, height: 30, borderRadius: "50%", border: "0.5px solid #ccc", background: "#f0f0ee", cursor: clampedIdx === months.length - 1 ? "not-allowed" : "pointer", opacity: clampedIdx === months.length - 1 ? 0.35 : 1, fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, padding: 0 }}>›</button>
         </div>
 
-        {submitted && (
-          <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 8, background: "#d4edda", border: "1.5px solid #3DBF82", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <span style={{ fontSize: 14, color: "#1a5e2a", fontWeight: 500 }}>Availability submitted!</span>
-            <button onClick={() => setSubmitted(false)} style={{ fontSize: 13, padding: "5px 12px", borderRadius: 8, border: "1px solid #3DBF82", background: "#fff", color: "#1a5e2a" }}>Edit</button>
-          </div>
-        )}
-
-        <div style={{ background: "#fff", borderRadius: 12, border: "0.5px solid #ddd", padding: "12px 10px", opacity: submitted ? 0.75 : 1 }}>
+        <div style={{ background: "#fff", borderRadius: 12, border: "0.5px solid #ddd", padding: "12px 10px" }}>
           <p style={{ textAlign: "center", fontWeight: 500, fontSize: 16, marginBottom: 12 }}>{MONTHS[month]} {year}</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2, marginBottom: 4 }}>
             {DAYS.map(d => <div key={d} style={{ textAlign: "center", fontSize: 11, color: "#888", padding: "2px 0" }}>{d}</div>)}
@@ -379,17 +439,17 @@ function App() {
               if (day < 1 || day > daysInMonth) return <div key={i} />;
               const mine = isMyDay(day);
               const users = getUsersOnDay(day);
-              const count = users.length, total = (sessionData.users || []).length;
+              const count = users.length;
               let bg = "#f5f5f4", border = "#ddd", textCol = "#1a1a18";
               if (count > 0) {
-                const ratio = count / Math.max(total, 1);
-                if (ratio === 1 && total > 1) { bg = "#d4edda"; textCol = "#1a5e2a"; border = "#3DBF82"; }
+                const ratio = count / Math.max(totalUsers, 1);
+                if (ratio === 1 && totalUsers > 1) { bg = "#d4edda"; textCol = "#1a5e2a"; border = "#3DBF82"; }
                 else if (ratio >= 0.5) { bg = "#fff3cd"; textCol = "#7a4f00"; border = "#F5A623"; }
                 else { bg = "#fde8e8"; textCol = "#7a1a1a"; border = "#E2534A"; }
               }
               return (
                 <div key={i} onClick={() => toggleDay(day)}
-                  style={{ minHeight: 54, borderRadius: 6, border: `1.5px solid ${mine ? userColor : border}`, background: bg, cursor: submitted ? "default" : "pointer", padding: "4px 5px", display: "flex", flexDirection: "column", justifyContent: "space-between", position: "relative" }}>
+                  style={{ minHeight: 54, borderRadius: 6, border: `1.5px solid ${mine ? userColor : border}`, background: bg, cursor: viewOnly ? "default" : "pointer", padding: "4px 5px", display: "flex", flexDirection: "column", justifyContent: "space-between", position: "relative" }}>
                   <span style={{ fontSize: 13, fontWeight: mine ? 500 : 400, color: textCol }}>{day}</span>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 2, minHeight: 10 }}>
                     {users.slice(0, 5).map((u, idx) => <div key={idx} style={{ width: 6, height: 6, borderRadius: "50%", background: u.color }} />)}
@@ -410,14 +470,115 @@ function App() {
           ))}
         </div>
 
-        {!submitted && (
-          <button onClick={() => setSubmitted(true)}
-            style={{ width: "100%", marginTop: 18, padding: "14px 0", fontSize: 15, fontWeight: 500, borderRadius: 8, background: "#3DBF82", color: "#fff", border: "none" }}>
-            Submit availability
-          </button>
+        {/* Overlap summary */}
+        {tiers.length > 0 && (
+          <div style={{ marginTop: 20, borderRadius: 12, border: "0.5px solid #ddd", overflow: "hidden" }}>
+            <div style={{ padding: "10px 14px", background: "#f5f5f4", borderBottom: "0.5px solid #ddd" }}>
+              <p style={{ fontSize: 13, fontWeight: 500 }}>Availability overlap summary</p>
+              <p style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{totalUsers} participant{totalUsers !== 1 ? "s" : ""} total</p>
+            </div>
+            {tiers.map(({ count, days }) => {
+              const isAll = count === totalUsers && totalUsers > 1;
+              const ratio = count / Math.max(totalUsers, 1);
+              let bg = "#fde8e8", textCol = "#7a1a1a", dot = "#E2534A";
+              if (isAll) { bg = "#d4edda"; textCol = "#1a5e2a"; dot = "#3DBF82"; }
+              else if (ratio >= 0.5) { bg = "#fff3cd"; textCol = "#7a4f00"; dot = "#F5A623"; }
+              const label = count === totalUsers ? `All ${totalUsers} available` : `${count} of ${totalUsers} available`;
+              return (
+                <div key={count} style={{ padding: "10px 14px", borderBottom: "0.5px solid #ddd", background: "#fff" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: dot, flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, fontWeight: 500 }}>{label}</span>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {days.map(({ label: dl, users }) => (
+                      <div key={dl} style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 10px", borderRadius: 20, background: bg, fontSize: 12, color: textCol }}>
+                        <span>{dl}</span>
+                        <div style={{ display: "flex", gap: 2, marginLeft: 4 }}>
+                          {users.slice(0, 5).map((u, i) => <div key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: u.color }} />)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
 
         <div style={{ marginTop: 16, padding: "12px 14px", borderRadius: 8, border: "0.5px solid #ddd", background: "#f5f5f4" }}>
+          <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Participants ({totalUsers})</p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {(sessionData.users || []).map((u, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 20, background: "#fff", border: "0.5px solid #ddd", fontSize: 13 }}>
+                <div style={{ width: 10, height: 10, borderRadius: "50%", background: u.color }} />
+                <span>{u.name}{u.name === userName ? " (you)" : ""}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {!viewOnly && <p style={{ fontSize: 12, color: "#888", marginTop: 10, textAlign: "center" }}>Tap any date to mark yourself as available. Tap again to remove.</p>}
+
+        {!viewOnly && (
+          <button onClick={() => setSubmitted(true)}
+            style={{ width: "100%", marginTop: 14, padding: "14px 0", fontSize: 15, fontWeight: 500, borderRadius: 8, background: "#3DBF82", color: "#fff", border: "none" }}>
+            Submit availability
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // ── SUBMITTED ──
+  if (submitted && sessionData) {
+    const avail = sessionData.availability || {};
+    const myDays = Object.entries(avail)
+      .filter(([, val]) => {
+        const users = typeof val === "object" ? Object.values(val) : [];
+        return users.some(u => u.name === userName);
+      })
+      .map(([key]) => { const [y, mo, d] = key.split("-").map(Number); return { y, mo, d }; })
+      .sort((a, b) => a.y !== b.y ? a.y - b.y : a.mo !== b.mo ? a.mo - b.mo : a.d - b.d);
+
+    const grouped = myDays.reduce((acc, { y, mo, d }) => {
+      const k = `${MONTHS[mo]} ${y}`;
+      if (!acc[k]) acc[k] = [];
+      acc[k].push(d);
+      return acc;
+    }, {});
+
+    return (
+      <div style={{ maxWidth: 420, margin: "2rem auto", padding: "0 1rem" }}>
+        <div style={{ padding: 20, borderRadius: 12, background: "#d4edda", border: "1.5px solid #3DBF82", marginBottom: 24, textAlign: "center" }}>
+          <div style={{ width: 48, height: 48, borderRadius: "50%", background: "#3DBF82", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", fontSize: 22, color: "#fff" }}>✓</div>
+          <p style={{ fontSize: 18, fontWeight: 500, color: "#1a5e2a", marginBottom: 4 }}>Availability submitted!</p>
+          <p style={{ fontSize: 14, color: "#2d7a3a" }}>Thanks, {userName}. Your selections have been saved.</p>
+        </div>
+
+        <div style={{ padding: "12px 16px", borderRadius: 8, background: "#EBF2FF", border: "1.5px solid #4F8EF7", marginBottom: 20 }}>
+          <p style={{ fontSize: 12, color: "#185FA5", marginBottom: 2, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.05em" }}>Event</p>
+          <p style={{ fontSize: 16, fontWeight: 500, color: "#0C447C" }}>{sessionData.title}</p>
+        </div>
+
+        <div style={{ padding: "14px 16px", borderRadius: 8, border: "0.5px solid #ddd", background: "#fff", marginBottom: 16 }}>
+          <p style={{ fontSize: 11, color: "#888", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 500 }}>Your available dates</p>
+          {Object.keys(grouped).length === 0
+            ? <p style={{ fontSize: 14, color: "#888" }}>No dates selected.</p>
+            : Object.entries(grouped).map(([label, days]) => (
+              <div key={label} style={{ marginBottom: 10 }}>
+                <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>{label}</p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {days.map(d => (
+                    <div key={d} style={{ width: 32, height: 32, borderRadius: 6, background: userColor, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 500, color: "#fff" }}>{d}</div>
+                  ))}
+                </div>
+              </div>
+            ))
+          }
+        </div>
+
+        <div style={{ padding: "12px 14px", borderRadius: 8, border: "0.5px solid #ddd", background: "#f5f5f4", marginBottom: 20 }}>
           <p style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Participants ({(sessionData.users || []).length})</p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {(sessionData.users || []).map((u, i) => (
@@ -428,7 +589,15 @@ function App() {
             ))}
           </div>
         </div>
-        <p style={{ fontSize: 12, color: "#888", marginTop: 10, textAlign: "center" }}>Tap any date to mark yourself as available. Tap again to remove.</p>
+
+        <button onClick={() => { setSubmitted(false); setViewOnly(true); }}
+          style={{ width: "100%", marginBottom: 10, padding: "14px 0", fontSize: 15, fontWeight: 500, borderRadius: 8, background: "#4F8EF7", color: "#fff", border: "none" }}>
+          View group availability
+        </button>
+        <button onClick={() => { setSubmitted(false); setViewOnly(false); }}
+          style={{ width: "100%", padding: "14px 0", fontSize: 15, fontWeight: 500, borderRadius: 8, background: "#fff", color: "#1a1a18", border: "1.5px solid #ccc" }}>
+          Edit my availability
+        </button>
       </div>
     );
   }
