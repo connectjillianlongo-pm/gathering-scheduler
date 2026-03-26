@@ -111,7 +111,9 @@ function dbListen(id, cb) {
 
 const { useState, useEffect } = React;
 
-/* ── PARTICIPANT LIST ── */
+/* ─────────────────────────────────────────
+   PARTICIPANT LIST
+───────────────────────────────────────── */
 function ParticipantList({ users, userName, sessionId, sessionData, saveSession }) {
   const [pendingDelete, setPendingDelete] = useState(null);
 
@@ -173,10 +175,153 @@ function ParticipantList({ users, userName, sessionId, sessionData, saveSession 
   );
 }
 
-/* ── MAIN APP ── */
+/* ─────────────────────────────────────────
+   ENTER AVAILABILITY FORM
+───────────────────────────────────────── */
+function EnterAvailabilityForm({ sessionId, sessionData, loadSession, saveSession, setUserName, setUserColor, setViewMonthIdx, setSubmitted, setViewOnly, setScreen, setJoinMode, error, setError, loading, setLoading }) {
+  const [mode, setMode] = useState(null); // null | "returning" | "new"
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [newName, setNewName] = useState("");
+  const [newColor, setNewColor] = useState("");
+
+  const existingUsers = sessionData?.users || [];
+  const takenColors = existingUsers.map(u => u.color);
+
+  // Auto-skip to new if no existing users
+  useEffect(() => {
+    if (existingUsers.length === 0) setMode("new");
+  }, []);
+
+  async function proceedAsReturning() {
+    if (!selectedUser) { setError("Select your name from the list."); return; }
+    setUserName(selectedUser.name);
+    setUserColor(selectedUser.color);
+    saveIdentity(sessionId, selectedUser.name, selectedUser.color);
+    setViewMonthIdx(0); setSubmitted(false); setViewOnly(false); setScreen("calendar"); setError("");
+  }
+
+  async function proceedAsNew() {
+    if (!newName.trim()) { setError("Enter your name."); return; }
+    if (!newColor) { setError("Pick a color."); return; }
+    setLoading(true);
+    const fresh = await dbGet(sessionId);
+    setLoading(false);
+    if (!fresh) { setError("Could not load session. Try again."); return; }
+    if ((fresh.users || []).some(u => u.color === newColor)) { setError("That color was just taken. Pick another."); return; }
+    const updated = { ...fresh, users: [...(fresh.users || []), { name: newName.trim(), color: newColor }] };
+    await saveSession(sessionId, updated);
+    setUserName(newName.trim());
+    setUserColor(newColor);
+    saveIdentity(sessionId, newName.trim(), newColor);
+    setViewMonthIdx(0); setSubmitted(false); setViewOnly(false); setScreen("calendar"); setError("");
+  }
+
+  return (
+    <>
+      <button onClick={() => { setJoinMode(null); setError(""); setMode(existingUsers.length === 0 ? "new" : null); }}
+        style={{ border: "none", color: "#888", fontSize: 13, padding: 0, marginBottom: 16, background: "none" }}>← Back</button>
+
+      {/* Step 1: returning or new */}
+      {!mode && existingUsers.length > 0 && (
+        <>
+          <h2 style={{ fontSize: 20, fontWeight: 500, marginBottom: 6 }}>Have you submitted availability before?</h2>
+          <p style={{ color: "#666", fontSize: 14, marginBottom: 20 }}>If you've already added your availability, select your name to update it without creating a duplicate entry.</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+            <div onClick={() => setMode("returning")}
+              style={{ padding: 14, borderRadius: 12, border: "1.5px solid #ddd", background: "#fff", cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 12 }}>
+              <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#EBF2FF", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>↩️</div>
+              <div>
+                <p style={{ fontSize: 14, fontWeight: 500, marginBottom: 2 }}>Yes, I've submitted before</p>
+                <p style={{ fontSize: 13, color: "#666" }}>Select your name to update your existing availability.</p>
+              </div>
+            </div>
+            <div onClick={() => setMode("new")}
+              style={{ padding: 14, borderRadius: 12, border: "1.5px solid #ddd", background: "#fff", cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 12 }}>
+              <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#e8f8f0", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>✨</div>
+              <div>
+                <p style={{ fontSize: 14, fontWeight: 500, marginBottom: 2 }}>No, I'm adding my availability for the first time</p>
+                <p style={{ fontSize: 13, color: "#666" }}>Enter your name and pick a color to get started.</p>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Returning: pick name from list */}
+      {mode === "returning" && (
+        <>
+          <button onClick={() => { setMode(null); setError(""); setSelectedUser(null); }}
+            style={{ border: "none", color: "#888", fontSize: 13, padding: 0, marginBottom: 16, background: "none" }}>← Back</button>
+          <h2 style={{ fontSize: 20, fontWeight: 500, marginBottom: 6 }}>Select your name</h2>
+          <p style={{ color: "#666", fontSize: 14, marginBottom: 16 }}>Tap your name below to continue with your existing color. Your previous availability will be kept and you can update it on the calendar.</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+            {existingUsers.map((u, i) => {
+              const isSel = selectedUser?.name === u.name;
+              return (
+                <div key={i} onClick={() => setSelectedUser(u)}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 8, border: isSel ? `2px solid ${u.color}` : "0.5px solid #ddd", background: isSel ? "#f9f9f8" : "#fff", cursor: "pointer" }}>
+                  <div style={{ width: 28, height: 28, borderRadius: "50%", background: u.color, flexShrink: 0, boxShadow: isSel ? `0 0 0 2px #fff, 0 0 0 4px ${u.color}` : "none" }} />
+                  <span style={{ fontSize: 15, fontWeight: isSel ? 500 : 400 }}>{u.name}</span>
+                  {isSel && <span style={{ marginLeft: "auto", fontSize: 13, color: "#888" }}>Selected ✓</span>}
+                </div>
+              );
+            })}
+          </div>
+          {error && <p style={{ color: "#c0392b", fontSize: 13, marginBottom: 10 }}>{error}</p>}
+          <button onClick={proceedAsReturning}
+            style={{ width: "100%", padding: "13px 0", fontSize: 15, fontWeight: 500, borderRadius: 8, background: selectedUser ? "#4F8EF7" : "#aaa", color: "#fff", border: "none", cursor: selectedUser ? "pointer" : "not-allowed" }}>
+            Continue as {selectedUser ? selectedUser.name : "..."}
+          </button>
+        </>
+      )}
+
+      {/* New user: name + color */}
+      {mode === "new" && (
+        <>
+          {existingUsers.length > 0 && (
+            <button onClick={() => { setMode(null); setError(""); }}
+              style={{ border: "none", color: "#888", fontSize: 13, padding: 0, marginBottom: 16, background: "none" }}>← Back</button>
+          )}
+          <h2 style={{ fontSize: 20, fontWeight: 500, marginBottom: 4 }}>Enter your details</h2>
+          <p style={{ color: "#666", fontSize: 14, marginBottom: 20 }}>Your name and color help the group identify your availability on the calendar. No two people can share a color.</p>
+          <label style={{ fontSize: 13, color: "#666", display: "block", marginBottom: 6 }}>Your name</label>
+          <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Jamie" style={{ marginBottom: 18 }} />
+          <label style={{ fontSize: 13, color: "#666", display: "block", marginBottom: 6 }}>Your color</label>
+          <p style={{ fontSize: 13, color: "#666", marginBottom: 10 }}>Pick a color that will represent your availability. Colors marked with ✕ are already taken.</p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
+            {PRESET_COLORS.map(c => {
+              const isTaken = takenColors.includes(c.hex), isSel = newColor === c.hex;
+              return (
+                <div key={c.hex} title={isTaken ? `${c.label} (taken)` : c.label} onClick={() => { if (!isTaken) setNewColor(c.hex); }}
+                  style={{ width: 34, height: 34, borderRadius: "50%", background: c.hex, opacity: isTaken ? 0.25 : 1, cursor: isTaken ? "not-allowed" : "pointer", border: isSel ? "3px solid #111" : "2px solid transparent", position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {isTaken && <span style={{ color: "#fff", fontSize: 14 }}>✕</span>}
+                </div>
+              );
+            })}
+          </div>
+          {newColor && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, padding: "10px 12px", borderRadius: 8, background: "#f5f5f4", fontSize: 13 }}>
+              <div style={{ width: 12, height: 12, borderRadius: "50%", background: newColor, flexShrink: 0 }} />
+              <span style={{ color: "#666" }}>Your availability will appear in this color on the shared calendar.</span>
+            </div>
+          )}
+          {error && <p style={{ color: "#c0392b", fontSize: 13, marginBottom: 10 }}>{error}</p>}
+          <button onClick={proceedAsNew}
+            style={{ width: "100%", padding: "13px 0", fontSize: 15, fontWeight: 500, borderRadius: 8, background: loading ? "#aaa" : "#4F8EF7", color: "#fff", border: "none", cursor: loading ? "not-allowed" : "pointer" }}>
+            {loading ? "Joining..." : "Go to calendar"}
+          </button>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ─────────────────────────────────────────
+   MAIN APP
+───────────────────────────────────────── */
 function App() {
   const [screen, setScreen] = useState("home");
-  const [joinMode, setJoinMode] = useState(null); // null | "enter" | "view"
+  const [joinMode, setJoinMode] = useState(null);
   const [userName, setUserName] = useState("");
   const [userColor, setUserColor] = useState("");
   const [selectedMonths, setSelectedMonths] = useState([]);
@@ -253,8 +398,6 @@ function App() {
     try { document.execCommand("copy"); cb?.(); } catch {}
     document.body.removeChild(ta);
   }
-
-  function usedColors() { return (sessionData?.users || []).map(u => u.color); }
 
   /* ── HOME ── */
   if (screen === "home") return (
@@ -334,104 +477,72 @@ function App() {
   }
 
   /* ── JOIN ── */
-  if (screen === "join") {
-    const taken = usedColors();
-    return (
-      <div style={{ maxWidth: 420, margin: "2rem auto", padding: "0 1rem" }}>
+  if (screen === "join") return (
+    <div style={{ maxWidth: 420, margin: "2rem auto", padding: "0 1rem" }}>
+      {sessionData?.title && (
+        <div style={{ marginBottom: 20, padding: "12px 16px", borderRadius: 8, background: "#EBF2FF", border: "1.5px solid #4F8EF7" }}>
+          <p style={{ fontSize: 12, color: "#185FA5", marginBottom: 2, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.05em" }}>Event</p>
+          <p style={{ fontSize: 18, fontWeight: 500, color: "#0C447C" }}>{sessionData.title}</p>
+        </div>
+      )}
 
-        {/* Event banner */}
-        {sessionData?.title && (
-          <div style={{ marginBottom: 20, padding: "12px 16px", borderRadius: 8, background: "#EBF2FF", border: "1.5px solid #4F8EF7" }}>
-            <p style={{ fontSize: 12, color: "#185FA5", marginBottom: 2, fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.05em" }}>Event</p>
-            <p style={{ fontSize: 18, fontWeight: 500, color: "#0C447C" }}>{sessionData.title}</p>
+      {/* Mode selector */}
+      {!joinMode && (
+        <>
+          <h2 style={{ fontSize: 20, fontWeight: 500, marginBottom: 6 }}>What would you like to do?</h2>
+          <p style={{ color: "#666", fontSize: 14, marginBottom: 20 }}>Choose whether you'd like to submit your own availability or just browse what others have shared.</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
+            <div onClick={() => setJoinMode("enter")}
+              style={{ padding: 16, borderRadius: 12, border: "1.5px solid #ddd", background: "#fff", cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 14 }}>
+              <div style={{ width: 38, height: 38, borderRadius: "50%", background: "#EBF2FF", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 18 }}>✏️</div>
+              <div>
+                <p style={{ fontSize: 15, fontWeight: 500, marginBottom: 3 }}>Enter my availability</p>
+                <p style={{ fontSize: 13, color: "#666" }}>Select the dates you're free so the group can find the best time.</p>
+              </div>
+            </div>
+            <div onClick={() => { setViewOnly(true); setViewMonthIdx(0); setScreen("calendar"); }}
+              style={{ padding: 16, borderRadius: 12, border: "1.5px solid #ddd", background: "#fff", cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 14 }}>
+              <div style={{ width: 38, height: 38, borderRadius: "50%", background: "#e8f8f0", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 18 }}>👀</div>
+              <div>
+                <p style={{ fontSize: 15, fontWeight: 500, marginBottom: 3 }}>View group availability</p>
+                <p style={{ fontSize: 13, color: "#666" }}>Browse the calendar to see when everyone is available — no sign-up needed.</p>
+              </div>
+            </div>
           </div>
-        )}
+          <div style={{ padding: 16, borderRadius: 8, border: "2px solid #4F8EF7", background: "#EBF2FF" }}>
+            <p style={{ fontSize: 13, fontWeight: 500, color: "#0C447C", marginBottom: 10 }}>Share this link with friends & family</p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input readOnly value={getShareUrl(sessionId)} style={{ flex: 1, fontSize: 12, padding: "8px 10px", border: "0.5px solid #4F8EF7", background: "#fff", color: "#555" }} />
+              <button onClick={() => copyLink(sessionId)}
+                style={{ padding: "8px 16px", fontSize: 13, fontWeight: 500, borderRadius: 8, whiteSpace: "nowrap", background: copied ? "#3DBF82" : "#4F8EF7", color: "#fff", border: "none" }}>
+                {copied ? "Copied!" : "Copy link"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
-        {/* Mode selector */}
-        {!joinMode && (
-          <>
-            <h2 style={{ fontSize: 20, fontWeight: 500, marginBottom: 6 }}>What would you like to do?</h2>
-            <p style={{ color: "#666", fontSize: 14, marginBottom: 20 }}>Choose whether you'd like to submit your own availability or just browse what others have shared.</p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 24 }}>
-              <div onClick={() => setJoinMode("enter")}
-                style={{ padding: 16, borderRadius: 12, border: "1.5px solid #ddd", background: "#fff", cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 14 }}>
-                <div style={{ width: 38, height: 38, borderRadius: "50%", background: "#EBF2FF", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 18 }}>✏️</div>
-                <div>
-                  <p style={{ fontSize: 15, fontWeight: 500, marginBottom: 3 }}>Enter my availability</p>
-                  <p style={{ fontSize: 13, color: "#666" }}>Select the dates you're free so the group can find the best time.</p>
-                </div>
-              </div>
-              <div onClick={() => { setViewOnly(true); setViewMonthIdx(0); setScreen("calendar"); }}
-                style={{ padding: 16, borderRadius: 12, border: "1.5px solid #ddd", background: "#fff", cursor: "pointer", display: "flex", alignItems: "flex-start", gap: 14 }}>
-                <div style={{ width: 38, height: 38, borderRadius: "50%", background: "#e8f8f0", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 18 }}>👀</div>
-                <div>
-                  <p style={{ fontSize: 15, fontWeight: 500, marginBottom: 3 }}>View group availability</p>
-                  <p style={{ fontSize: 13, color: "#666" }}>Browse the calendar to see when everyone is available — no sign-up needed.</p>
-                </div>
-              </div>
-            </div>
-            {/* Share link */}
-            <div style={{ padding: 16, borderRadius: 8, border: "2px solid #4F8EF7", background: "#EBF2FF" }}>
-              <p style={{ fontSize: 13, fontWeight: 500, color: "#0C447C", marginBottom: 10 }}>Share this link with friends & family</p>
-              <div style={{ display: "flex", gap: 8 }}>
-                <input readOnly value={getShareUrl(sessionId)} style={{ flex: 1, fontSize: 12, padding: "8px 10px", border: "0.5px solid #4F8EF7", background: "#fff", color: "#555" }} />
-                <button onClick={() => copyLink(sessionId)}
-                  style={{ padding: "8px 16px", fontSize: 13, fontWeight: 500, borderRadius: 8, whiteSpace: "nowrap", background: copied ? "#3DBF82" : "#4F8EF7", color: "#fff", border: "none" }}>
-                  {copied ? "Copied!" : "Copy link"}
-                </button>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Enter availability form */}
-        {joinMode === "enter" && (
-          <>
-            <button onClick={() => { setJoinMode(null); setError(""); }} style={{ border: "none", color: "#888", fontSize: 13, padding: 0, marginBottom: 16, background: "none" }}>← Back</button>
-            <h2 style={{ fontSize: 20, fontWeight: 500, marginBottom: 4 }}>Enter your details</h2>
-            <p style={{ color: "#666", fontSize: 14, marginBottom: 20 }}>Your name and color help the group identify your availability on the calendar. No two people can share a color.</p>
-            <label style={{ fontSize: 13, color: "#666", display: "block", marginBottom: 6 }}>Your name</label>
-            <input value={userName} onChange={e => setUserName(e.target.value)} placeholder="e.g. Jamie" style={{ marginBottom: 18 }} />
-            <label style={{ fontSize: 13, color: "#666", display: "block", marginBottom: 6 }}>Your color</label>
-            <p style={{ fontSize: 13, color: "#666", marginBottom: 10 }}>Pick a color that will represent your availability on the calendar. Colors marked with ✕ are already taken.</p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
-              {PRESET_COLORS.map(c => {
-                const isTaken = taken.includes(c.hex), isSel = userColor === c.hex;
-                return (
-                  <div key={c.hex} title={isTaken ? `${c.label} (taken)` : c.label} onClick={() => { if (!isTaken) setUserColor(c.hex); }}
-                    style={{ width: 34, height: 34, borderRadius: "50%", background: c.hex, opacity: isTaken ? 0.25 : 1, cursor: isTaken ? "not-allowed" : "pointer", border: isSel ? "3px solid #111" : "2px solid transparent", position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    {isTaken && <span style={{ color: "#fff", fontSize: 14 }}>✕</span>}
-                  </div>
-                );
-              })}
-            </div>
-            {userColor && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, padding: "10px 12px", borderRadius: 8, background: "#f5f5f4", fontSize: 13 }}>
-                <div style={{ width: 12, height: 12, borderRadius: "50%", background: userColor, flexShrink: 0 }} />
-                <span style={{ color: "#666" }}>Your availability will appear in this color on the shared calendar.</span>
-              </div>
-            )}
-            {error && <p style={{ color: "#c0392b", fontSize: 13, marginBottom: 10 }}>{error}</p>}
-            <button onClick={async () => {
-              if (!userName.trim()) { setError("Enter your name."); return; }
-              if (!userColor) { setError("Pick a color."); return; }
-              setLoading(true);
-              const fresh = await dbGet(sessionId);
-              setLoading(false);
-              if (!fresh) { setError("Could not load session. Try again."); return; }
-              if ((fresh.users || []).some(u => u.color === userColor)) { setError("That color was just taken. Pick another."); return; }
-              const updated = { ...fresh, users: [...(fresh.users || []), { name: userName.trim(), color: userColor }] };
-              await saveSession(sessionId, updated);
-              saveIdentity(sessionId, userName.trim(), userColor);
-              setViewMonthIdx(0); setSubmitted(false); setViewOnly(false); setScreen("calendar"); setError("");
-            }} style={{ width: "100%", padding: "13px 0", fontSize: 15, fontWeight: 500, borderRadius: 8, background: loading ? "#aaa" : "#4F8EF7", color: "#fff", border: "none" }}>
-              {loading ? "Joining..." : "Go to calendar"}
-            </button>
-          </>
-        )}
-      </div>
-    );
-  }
+      {joinMode === "enter" && (
+        <EnterAvailabilityForm
+          sessionId={sessionId}
+          sessionData={sessionData}
+          loadSession={loadSession}
+          saveSession={saveSession}
+          setUserName={setUserName}
+          setUserColor={setUserColor}
+          setViewMonthIdx={setViewMonthIdx}
+          setSubmitted={setSubmitted}
+          setViewOnly={setViewOnly}
+          setScreen={setScreen}
+          setJoinMode={setJoinMode}
+          error={error}
+          setError={setError}
+          loading={loading}
+          setLoading={setLoading}
+        />
+      )}
+    </div>
+  );
 
   /* ── CALENDAR ── */
   if (screen === "calendar" && !submitted && sessionData) {
@@ -471,7 +582,7 @@ function App() {
     Object.entries(avail).forEach(([key, val]) => {
       const users = Array.isArray(val) ? val : Object.values(val);
       const count = users.length;
-      if (count === 0) return;
+      if (!count) return;
       const [y, mo, d] = key.split("-").map(Number);
       const label = `${MONTHS[mo].slice(0,3)} ${d}, ${y}`;
       if (!overlapSummary[count]) overlapSummary[count] = [];
@@ -484,7 +595,6 @@ function App() {
 
     return (
       <div style={{ maxWidth: 560, margin: "1rem auto", padding: "0 0.5rem" }}>
-
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
           <div>
@@ -508,7 +618,6 @@ function App() {
           </div>
         </div>
 
-        {/* View-only banner */}
         {viewOnly && (
           <div style={{ marginBottom: 14, padding: "10px 14px", borderRadius: 8, background: "#EBF2FF", border: "1px solid #4F8EF7", fontSize: 13, color: "#185FA5" }}>
             Viewing group availability — tap "Enter my availability" above to participate.
